@@ -202,6 +202,30 @@ If you are integrating **Intel GPU**, the lowest-risk approach is to mirror the 
 
 This backend boundary is the key design point for clean integration: keep public Python APIs stable, and add Intel support behind backend-specific modules and build flags.
 
+#### How to reuse the existing backend pattern (concrete, file-by-file)
+For Intel GPU integration, you can copy the AMD Triton backend pattern with minimal risk:
+
+1. Create a new backend package, e.g. `flash_attn/flash_attn_triton_intel/`, mirroring `flash_attn/flash_attn_triton_amd/`.
+   - Start with `__init__.py` exporting `flash_attn_2` (and optionally `flash_attn_3` later).
+   - Implement the FA2 interface contract first (`fwd`, `varlen_fwd`, `bwd`, `varlen_bwd`, `fwd_kvcache`) so `flash_attn_interface.py` can call it unchanged.
+2. Add runtime routing in `flash_attn/flash_attn_interface.py` using a dedicated environment flag.
+3. Add build flag handling in `setup.py` (similar to existing `BUILD_TARGET` + env-driven backend switches), while leaving CUDA/ROCm code paths untouched.
+4. Reuse backend tests incrementally:
+   - First run `tests/test_flash_attn.py` for API compatibility.
+   - Then adapt / extend `tests/test_flash_attn_triton_amd.py` patterns for backend-specific coverage.
+
+Minimal routing shape in `flash_attn_interface.py` should look like:
+```python
+USE_TRITON_INTEL = os.getenv("FLASH_ATTENTION_TRITON_INTEL_ENABLE", "FALSE") == "TRUE"
+USE_TRITON_ROCM = os.getenv("FLASH_ATTENTION_TRITON_AMD_ENABLE", "FALSE") == "TRUE"
+if USE_TRITON_INTEL:
+    from .flash_attn_triton_intel import flash_attn_2 as flash_attn_gpu
+elif USE_TRITON_ROCM:
+    from .flash_attn_triton_amd import flash_attn_2 as flash_attn_gpu
+else:
+    import flash_attn_2_cuda as flash_attn_gpu
+```
+
 ## How to use FlashAttention
 
 The main functions implement scaled dot product attention (softmax(Q @ K^T *
