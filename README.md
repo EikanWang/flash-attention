@@ -177,6 +177,31 @@ docker build -t flash-attn-triton .
 docker run -it --network=host --user root --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --ipc=host --shm-size 16G --device=/dev/kfd --device=/dev/dri flash-attn-triton
 ```
 
+### Backend architecture and porting guide (for new GPUs, e.g. Intel)
+FlashAttention in this repo is organized as a common Python API with backend-specific kernels:
+
+1. **Public API layer**: `flash_attn/__init__.py`, `flash_attn/flash_attn_interface.py`
+2. **Runtime backend selection**:
+   - CUDA path: `flash_attn_2_cuda` extension
+   - AMD Triton path: `FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE` + `flash_attn/flash_attn_triton_amd/*`
+3. **Build-time backend selection**: `setup.py` (`BUILD_TARGET`, `IS_ROCM`, extension registration)
+4. **Kernel implementations**:
+   - CUDA: `csrc/flash_attn*`, `csrc/flash_attn/src/*`
+   - ROCm CK: `csrc/composable_kernel/*`
+   - ROCm Triton: `flash_attn/flash_attn_triton_amd/*`
+
+If you are integrating **Intel GPU**, the lowest-risk approach is to mirror the existing backend pattern:
+
+1. Add an Intel backend module that implements the same callable surface used by `flash_attn_interface.py` (`fwd`, `varlen_fwd`, `bwd`, `varlen_bwd`, etc.).
+2. Add an environment switch (similar to `FLASH_ATTENTION_TRITON_AMD_ENABLE`) and route backend import in `flash_attn_interface.py`.
+3. Add build logic in `setup.py` for Intel toolchain / kernels while keeping CUDA and ROCm paths unchanged.
+4. Start from core parity first (fp16/bf16, causal/non-causal, fixed/varlen) before adding advanced features (paged KV cache, sliding window, FP8).
+5. Reuse existing backend tests as the compatibility contract:
+   - API-level tests: `tests/test_flash_attn.py`
+   - Backend-style tests: `tests/test_flash_attn_triton_amd.py`
+
+This backend boundary is the key design point for clean integration: keep public Python APIs stable, and add Intel support behind backend-specific modules and build flags.
+
 ## How to use FlashAttention
 
 The main functions implement scaled dot product attention (softmax(Q @ K^T *
